@@ -15,6 +15,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../scripts/firebase';
+import { getAuth } from 'firebase/auth';
 
 
 
@@ -33,6 +34,14 @@ const RoomPage = () => {
   const generateRoomCode = async () => {
     if (numPersons && workout) {
       try {
+        const auth = getAuth();
+        const currentUser = auth.currentUser;
+
+        if (!currentUser) {
+          Alert.alert('Error', 'User is not authenticated');
+          return;
+        }
+
         // Generate the room code
         const code = `${Math.floor(1000 + Math.random() * 9000)}`;
         setRoomCode(code);
@@ -45,6 +54,7 @@ const RoomPage = () => {
           workout: workout.trim(), // Ensure it's a string
           createdAt: new Date(), // Optional: Add a timestamp
           participants: [], // Add an empty array for future data storage
+          creatorId: currentUser.uid, // Add creatorId to identify the creator
         });
   
         Alert.alert('Success', 'Room created and saved in Firebase!');

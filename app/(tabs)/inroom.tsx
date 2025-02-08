@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { StyleSheet, View, Text, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useLocalSearchParams } from 'expo-router';// Import useRouter for navigation
-import { collection, query, where, getDocs, DocumentData, updateDoc, arrayUnion, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, DocumentData, updateDoc, arrayUnion, doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../scripts/firebase';
 import { getAuth } from 'firebase/auth';
 import { useUser } from '../../context/UserContext'; // Import useUser hook
@@ -14,18 +14,8 @@ const InRoomTab = () => {
   const [participants, setParticipants] = useState<Array<{ id: number; [key: string]: any }>>([]);
   const [loading, setLoading] = useState(true);
   const { user } = useUser(); // Get user data from context
-
-  // Example workout name
-  const workoutName = "Selected Workout Name";
-
-  // Random leaderboard data
-  const leaderboard = [
-    { id: 1, name: "Alice", score: 120 },
-    { id: 2, name: "Bob", score: 100 },
-    { id: 3, name: "Charlie", score: 95 },
-    { id: 4, name: "David", score: 85 },
-    { id: 5, name: "Eve", score: 80 },
-  ];
+  const [isCreator, setIsCreator] = useState(false);
+  const [roomEnded, setRoomEnded] = useState(false);
 
   useEffect(() => {
     const fetchRoomData = async () => {
@@ -56,7 +46,14 @@ const InRoomTab = () => {
         
         if (!roomSnapshot.empty) {
           const roomDoc = roomSnapshot.docs[0];
-          setRoomData(roomDoc.data());
+          const roomData = roomDoc.data();
+          roomData.id = roomDoc.id; // Ensure the id is set
+          setRoomData(roomData);
+
+          // Check if the current user is the creator of the room
+          if (roomData.creatorId === currentUser.uid) {
+            setIsCreator(true);
+          }
 
           // Add current user to participants array in the room document
           const roomRef = doc(db, 'rooms', roomDoc.id);
@@ -64,10 +61,13 @@ const InRoomTab = () => {
             participants: arrayUnion({ name: userName, score: userScore || 0 })
           });
 
-          // Get updated participants data
-          const updatedRoomSnapshot = await getDocs(roomQuery);
-          const updatedRoomDoc = updatedRoomSnapshot.docs[0];
-          setParticipants(updatedRoomDoc.data().participants);
+          // Listen for real-time updates to the participants
+          onSnapshot(roomRef, (doc) => {
+            const updatedRoomData = doc.data();
+            if (updatedRoomData) {
+              setParticipants(updatedRoomData.participants);
+            }
+          });
         }
       } catch (error) {
         console.error('Error fetching room data:', error);
@@ -79,9 +79,77 @@ const InRoomTab = () => {
     fetchRoomData();
   }, [roomCode, userScore, user.name]);
 
+  const exitRoom = async () => {
+    if (!roomData || !roomData.id) return;
+
+    try {
+      const roomRef = doc(db, 'rooms', roomData.id);
+      await updateDoc(roomRef, {
+        participants: []
+      });
+
+      Alert.alert('Room Closed', 'The room has been closed by the creator.');
+      router.push('/room'); // Navigate to room.tsx
+    } catch (error) {
+      console.error('Error exiting room:', error);
+    }
+  };
+
+  const endRoom = async () => {
+    if (!roomData || !roomData.id) return;
+
+    try {
+      const roomRef = doc(db, 'rooms', roomData.id);
+      await updateDoc(roomRef, {
+        participants: []
+      });
+
+      Alert.alert('Room Ended', 'The room has been ended by the creator.');
+      router.push('/room'); // Navigate to room.tsx
+    } catch (error) {
+      console.error('Error ending room:', error);
+    }
+  };
+
+  useEffect(() => {
+    const checkRoomStatus = async () => {
+      if (!roomCode || roomEnded) return;
+
+      try {
+        const roomQuery = query(
+          collection(db, 'rooms'),
+          where('roomCode', '==', roomCode)
+        );
+        const roomSnapshot = await getDocs(roomQuery);
+
+        if (!roomSnapshot.empty) {
+          const roomDoc = roomSnapshot.docs[0];
+          const roomData = roomDoc.data();
+
+          if (roomData.participants.length === 0) {
+            setRoomEnded(true);
+            Alert.alert('Room Ended', 'The room has been ended by the creator.');
+            router.push('/room'); // Navigate to room.tsx
+          }
+        }
+      } catch (error) {
+        console.error('Error checking room status:', error);
+      }
+    };
+
+    const interval = setInterval(checkRoomStatus, 5000); // Check every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [roomCode, roomEnded]);
+
   // Navigate back to the Room tab
   const navigateBack = () => {
     router.push('/room'); // Navigate to room.tsx
+  };
+
+  const startWorkout = () => {
+    Alert.alert('Workout Started', 'The workout has been started!');
+    // Add any additional logic for starting the workout here
   };
 
   return (
@@ -93,6 +161,20 @@ const InRoomTab = () => {
         <TouchableOpacity style={styles.backButton} onPress={navigateBack}>
           <Text style={styles.backButtonText}>{"< Back"}</Text>
         </TouchableOpacity>
+
+        {isCreator && (
+          <>
+            <TouchableOpacity style={styles.exitButton} onPress={exitRoom}>
+              <Text style={styles.exitButtonText}>Exit Room</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.endButton} onPress={endRoom}>
+              <Text style={styles.endButtonText}>End Room</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.startButton} onPress={startWorkout}>
+              <Text style={styles.startButtonText}>START WORKOUT</Text>
+            </TouchableOpacity>
+          </>
+        )}
 
         <View style={styles.headerContainer}>
           <Text style={styles.headerText}>
@@ -232,7 +314,67 @@ const styles = StyleSheet.create({
     marginTop: 20,
     fontSize: 16,
     color: '#666',
-  }
+  },
+  exitButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    backgroundColor: '#FF6347', // Tomato color for exit button
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
+  },
+  exitButtonText: {
+    color: '#fff', // White text
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  endButton: {
+    position: 'absolute',
+    top: 40,
+    right: 100,
+    backgroundColor: '#FF4500', // Orange red color for end button
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
+  },
+  endButtonText: {
+    color: '#fff', // White text
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  startButton: {
+    position: 'absolute',
+    top: 40,
+    right: 180,
+    backgroundColor: '#32CD32', // Lime green color for start button
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
+  },
+  startButtonText: {
+    color: '#fff', // White text
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
 });
 
 export default InRoomTab;
